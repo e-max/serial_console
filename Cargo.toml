@@ -14,6 +14,9 @@ serde = "1.0.106"
 serde_derive = "1.0.106"
 serialport = "3.3.0"
 mio-serial = "3.3.1"
+smol = "0.1.4"
+piper = "0.1.1"
+futures = "0.3.5"
 
 
 [dev-dependencies]

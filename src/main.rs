@@ -6,6 +6,7 @@ use std::io::Write;
 use std::time::Duration;
 
 use linefeed::{Interface, ReadResult, Terminal};
+
 use serde_json;
 
 //use serialport::open;
@@ -88,7 +89,14 @@ async fn cli<T: Terminal>(
 ) -> Result<(), Error> {
     while let ReadResult::Input(input) = interface.read_line()? {
         writeln!(interface, "got input {:?}", input);
-        tx.send(Message::Msg(input)).await;
+        match serde_json::from_str(&input) {
+            Ok(m) => {
+                tx.send(m).await;
+            }
+            Err(e) => {
+                writeln!(interface, "cannot parse command {:?}", e);
+            }
+        }
     }
     Ok(())
 }

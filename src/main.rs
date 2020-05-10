@@ -89,6 +89,8 @@ async fn cli<T: Terminal>(
 ) -> Result<(), Error> {
     while let ReadResult::Input(input) = interface.read_line()? {
         writeln!(interface, "got input {:?}", input);
+        interface.add_history_unique(input.clone());
+
         match serde_json::from_str(&input) {
             Ok(m) => {
                 tx.send(m).await;

@@ -1187,7 +1187,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "serial_port"
+name = "serial_console"
 version = "0.1.0"
 dependencies = [
  "criterion",

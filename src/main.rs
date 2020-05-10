@@ -1,13 +1,12 @@
-use serialport;
-
 use piper;
 use std::convert::From;
 use std::env;
 use std::fmt::Debug;
-use std::io;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::time::Duration;
-use std::{mem, thread};
+
+use linefeed::{Interface, ReadResult, Terminal};
+use serde_json;
 
 //use serialport::open;
 //use serialport::{DataBits, FlowControl, Parity, SerialPort, SerialPortSettings, StopBits};
@@ -18,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use mio_serial;
 use mio_serial::{DataBits, FlowControl, Parity, Serial, SerialPort, SerialPortSettings, StopBits};
 
-use smol::{self, Async, Timer};
+use smol::{self, blocking, Async, Timer};
 
 use futures::future;
 use futures::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
@@ -48,7 +47,7 @@ const SETTINGS: SerialPortSettings = mio_serial::SerialPortSettings {
     timeout: Duration::from_secs(3600),
 };
 
-fn main() {
+fn main() -> Result<(), Error> {
     let path = env::args()
         .skip(1)
         .next()
@@ -59,48 +58,62 @@ fn main() {
     let mut portw = piper::Arc::new(Async::new(portw_).unwrap());
     let mut portr = portw.clone();
 
-    smol::Task::spawn(async { async_write_usart(portw).await })
+    let (mut tx, rx) = piper::chan::<Message>(100);
+
+    let interface = piper::Arc::new(Interface::new("async-demo")?);
+    interface.set_prompt("async-demo> ")?;
+
+    let iface = interface.clone();
+
+    smol::Task::spawn(async { async_write_usart(iface, portw, rx).await })
         .unwrap()
         .detach();
 
-    smol::Task::spawn(async { async_read_usart(portr).await })
+    let iface = interface.clone();
+    smol::Task::spawn(async { async_read_usart(iface, portr).await })
         .unwrap()
         .detach();
+
+    smol::Task::blocking(async { cli(interface, tx).await })
+        .unwrap()
+        .detach();
+
     smol::run(future::pending::<()>());
-
-    // Send out 4 bytes every second
-    //thread::spawn(move || loop {
-    //clone
-    //.write(&[5, 6, 7, 8])
-    //.expect("Failed to write to serial port");
-    //thread::sleep(Duration::from_millis(1000));
-    //});
-
-    // Read the four bytes back from the cloned port
-    //
-    //read_usart(portr);
-    println!("Hello, world!");
+    Ok(())
 }
-async fn async_write_usart(mut port: impl AsyncWrite + Unpin) -> Result<(), Error> {
-    println!("Start writer");
-    let mut buf: [u8; 32] = [0; 32];
-    let my_msg = Message::Msg("hello".to_owned());
-    let my_coord = Message::Coord { x: 32, y: 12 };
-    let my_list = Message::List(vec![1, 2, 3]);
 
-    loop {
-        let used = to_slice_cobs(&my_msg, &mut buf[..])?;
-        port.write_all(&used).await?;
-        let used = to_slice_cobs(&my_coord, &mut buf[..])?;
-        port.write_all(&used).await?;
-        let used = to_slice_cobs(&my_list, &mut buf[..])?;
-        port.write_all(&used).await?;
-        Timer::after(Duration::from_secs(1)).await;
+async fn cli<T: Terminal>(
+    interface: piper::Arc<Interface<T>>,
+    tx: piper::Sender<Message>,
+) -> Result<(), Error> {
+    while let ReadResult::Input(input) = interface.read_line()? {
+        writeln!(interface, "got input {:?}", input);
+        tx.send(Message::Msg(input)).await;
     }
+    Ok(())
 }
 
-async fn async_read_usart(port: impl AsyncRead + Unpin) -> Result<(), Error> {
-    println!("start reader");
+async fn async_write_usart<T: Terminal>(
+    term: piper::Arc<Interface<T>>,
+    mut port: impl AsyncWrite + Unpin,
+    rx: piper::Receiver<Message>,
+) -> Result<(), Error> {
+    writeln!(term, "Start writer");
+    let mut buf: [u8; 32] = [0; 32];
+
+    while let Some(msg) = rx.recv().await {
+        writeln!(term, "try to send msg = {:?}", msg);
+        let used = to_slice_cobs(&msg, &mut buf[..])?;
+        port.write_all(&used).await?;
+    }
+    Ok(())
+}
+
+async fn async_read_usart<T: Terminal>(
+    term: piper::Arc<Interface<T>>,
+    port: impl AsyncRead + Unpin,
+) -> Result<(), Error> {
+    writeln!(term, "start reader");
     //let mut pool = Pool::with_capacity(5, 0, || Vec::with_capacity(512));
     let mut reader = BufReader::new(port);
     let mut n = 0;
@@ -110,7 +123,7 @@ async fn async_read_usart(port: impl AsyncRead + Unpin) -> Result<(), Error> {
         vec.clear();
         n = reader.read_until(0u8, &mut vec).await?;
         let msg: Message = from_bytes_cobs(vec.as_mut_slice())?;
-        println!("msg = {:?}", msg);
+        writeln!(term, "msg = {:?}", msg);
     }
 }
 
